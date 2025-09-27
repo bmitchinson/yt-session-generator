@@ -72,6 +72,8 @@ class PotokenExtractor:
     @staticmethod
     def _extract_token(request: nodriver.cdp.network.Request) -> Optional[TokenInfo]:
         post_data = request.post_data
+        logger.info("fork logC: post_data: %s", post_data)
+        logger.info("fork logD: post_data: %r", post_data)
         try:
             post_data_json = json.loads(post_data)
             logger.info("fork logA: post_data_json: %s", post_data_json)
