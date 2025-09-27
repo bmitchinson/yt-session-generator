@@ -74,6 +74,8 @@ class PotokenExtractor:
         post_data = request.post_data
         try:
             post_data_json = json.loads(post_data)
+            logger.info("fork logA: post_data_json: %s", post_data_json)
+            logger.info("fork logB: post_data_json: %r", post_data_json)
             visitor_data = post_data_json['context']['client']['visitorData']
             potoken = post_data_json['serviceIntegrityDimensions']['poToken']
         except (json.JSONDecodeError, TypeError, KeyError) as e:
