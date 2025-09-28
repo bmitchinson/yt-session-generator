@@ -272,13 +272,8 @@ class PotokenExtractor:
             await tab.get(url_embed)
             logger.debug("navigation finished")
             player_clicked = await self._click_on_player(tab)
-            success = False
-            if player_clicked:
-                success = await self._wait_for_handler()
-            else:
-                logger.debug(
-                    "skipping wait: player was not clicked (element not found)"
-                )
+            # Always give the embed a brief window to emit youtubei requests
+            success = await self._wait_for_handler(timeout_s=15)
             if not success:
                 url_watch = "https://www.youtube.com/watch?v=jNQXAC9IVRw&hl=en&autoplay=1&mute=1"
                 logger.debug("fallback: navigating to %s", url_watch)
@@ -287,9 +282,9 @@ class PotokenExtractor:
                 player_clicked = await self._click_on_player(tab)
                 if not player_clicked:
                     logger.debug(
-                        "player element not found; continuing to wait for API request anyway"
+                        "player element not found; will still wait for API request"
                     )
-                await self._wait_for_handler()
+                await self._wait_for_handler(timeout_s=120)
             await tab.close()
             browser.stop()
 
@@ -305,7 +300,7 @@ class PotokenExtractor:
         ]
         for sel in consent_selectors:
             try:
-                btn = await tab.select(sel, 3)
+                btn = await tab.select(sel, 2)
             except asyncio.TimeoutError:
                 continue
             else:
@@ -323,7 +318,7 @@ class PotokenExtractor:
         ]
         for sel in selectors:
             try:
-                el = await tab.select(sel, 5)
+                el = await tab.select(sel, 2)
             except asyncio.TimeoutError:
                 logger.debug("player click: element not found for selector %s", sel)
                 continue
@@ -343,23 +338,20 @@ class PotokenExtractor:
         logger.warning("update failed: unable to locate/click any video player element")
         return False
 
-    async def _wait_for_handler(self) -> bool:
+    async def _wait_for_handler(self, timeout_s: int = 120) -> bool:
         try:
-            timeout_s = 60
             logger.debug(
-                "waiting up to %ss for outgoing POST /youtubei/v1/player request",
+                "waiting up to %ss for youtubei POST (player/next) request",
                 timeout_s,
             )
             await asyncio.wait_for(self._extraction_done.wait(), timeout=timeout_s)
         except asyncio.TimeoutError:
             logger.warning(
-                "update failed: timeout waiting for outgoing API request (did not observe POST /youtubei/v1/player)"
+                "timeout waiting for youtubei POST (player/next); will consider fallback if applicable"
             )
             return False
         else:
-            logger.info(
-                'nevermind the "update failed waiting for outgoing API req" update was successful'
-            )
+            logger.info("token extraction event observed")
             return True
 
     async def _send_handler(
