@@ -76,8 +76,6 @@ class PotokenExtractor:
     @staticmethod
     def _extract_token(request: nodriver.cdp.network.Request) -> Optional[TokenInfo]:
         post_data = request.post_data
-        logger.info("fork logC: post_data: %s", post_data)
-        logger.info("fork logD: post_data: %r", post_data)
         if not post_data:
             logger.debug(
                 "matched /youtubei/v1/player but request has no post_data; url=%s",
@@ -86,8 +84,6 @@ class PotokenExtractor:
             return None
         try:
             post_data_json = json.loads(post_data)
-            logger.info("fork logA: post_data_json: %s", post_data_json)
-            logger.info("fork logB: post_data_json: %r", post_data_json)
             visitor_data = post_data_json["context"]["client"]["visitorData"]
             potoken = post_data_json["serviceIntegrityDimensions"]["poToken"]
         except (json.JSONDecodeError, TypeError, KeyError) as e:
@@ -176,7 +172,9 @@ class PotokenExtractor:
             )
             return False
         else:
-            logger.info("update was succeessful")
+            logger.info(
+                'nevermind the "update failed waiting for outgoing API req" update was successful'
+            )
             return True
 
     async def _send_handler(
