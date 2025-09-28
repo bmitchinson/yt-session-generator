@@ -82,13 +82,145 @@ class PotokenExtractor:
                 getattr(request, "url", "<unknown>"),
             )
             return None
+
+        # Parse JSON first, logging helpful diagnostics on failure
         try:
             post_data_json = json.loads(post_data)
-            visitor_data = post_data_json["context"]["client"]["visitorData"]
-            potoken = post_data_json["serviceIntegrityDimensions"]["poToken"]
-        except (json.JSONDecodeError, TypeError, KeyError) as e:
-            logger.warning(f"failed to extract token from request: {type(e)}, {e}")
+        except json.JSONDecodeError as e:
+            snippet = post_data[:512] if isinstance(post_data, str) else None
+            logger.warning(
+                "failed to parse request post_data as JSON; len=%s snippet=%s error=%s url=%s",
+                len(post_data) if isinstance(post_data, str) else None,
+                snippet,
+                e,
+                getattr(request, "url", "<unknown>"),
+            )
             return None
+
+        # Helpers for recursive, best-effort lookups
+        def try_get_path(d: dict, path_keys: list[str]) -> Optional[object]:
+            cur: object = d
+            for k in path_keys:
+                if not isinstance(cur, dict) or k not in cur:
+                    return None
+                cur = cur[k]
+            return cur
+
+        def find_key(
+            obj: object, key_predicate, path: str = ""
+        ) -> Optional[tuple[str, object]]:
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    p = f"{path}.{k}" if path else k
+                    try:
+                        if key_predicate(k, v):
+                            return p, v
+                    except Exception:
+                        # Be defensive; never let diagnostics break extraction
+                        pass
+                    found = find_key(v, key_predicate, p)
+                    if found:
+                        return found
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    p = f"{path}[{i}]"
+                    found = find_key(v, key_predicate, p)
+                    if found:
+                        return found
+            return None
+
+        # First, try canonical paths
+        visitor_data: Optional[str] = None
+        potoken: Optional[str] = None
+
+        visitor_data = try_get_path(
+            post_data_json, ["context", "client", "visitorData"]
+        )
+        service_dims = try_get_path(post_data_json, ["serviceIntegrityDimensions"])
+        if isinstance(service_dims, dict):
+            potoken = service_dims.get("poToken")
+
+        # If poToken missing at canonical path, try recursive search for key "poToken"
+        if potoken is None:
+            found = find_key(
+                post_data_json,
+                lambda k, v: isinstance(k, str) and k.lower() == "potoken",
+            )
+            if found:
+                path_found, val = found
+                potoken = val if isinstance(val, str) else None
+                logger.debug(
+                    "poToken found via recursive search at path=%s", path_found
+                )
+
+        # If visitorData missing at canonical path, try recursive search
+        if visitor_data is None:
+            found_vis = find_key(
+                post_data_json,
+                lambda k, v: isinstance(k, str)
+                and k == "visitorData"
+                and isinstance(v, str),
+            )
+            if found_vis:
+                path_found, val = found_vis
+                visitor_data = val
+                logger.debug(
+                    "visitorData found via recursive search at path=%s", path_found
+                )
+
+        # If still missing, log deep diagnostics about the structure and token-like keys
+        if potoken is None or visitor_data is None:
+            top_keys = (
+                list(post_data_json.keys())
+                if isinstance(post_data_json, dict)
+                else None
+            )
+            service_keys = (
+                list(service_dims.keys()) if isinstance(service_dims, dict) else None
+            )
+
+            tokens_like: list[tuple[str, str]] = []
+
+            def collect_token_like(obj: object, path: str = "") -> None:
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        p = f"{path}.{k}" if path else k
+                        if isinstance(k, str) and "token" in k.lower():
+                            tokens_like.append((p, type(v).__name__))
+                        collect_token_like(v, p)
+                elif isinstance(obj, list):
+                    for i, v in enumerate(obj):
+                        p = f"{path}[{i}]"
+                        collect_token_like(v, p)
+
+            try:
+                collect_token_like(post_data_json)
+            except Exception as e:
+                logger.debug("diagnostic traversal failed: %s: %s", type(e).__name__, e)
+
+            # Include a safe snippet of the JSON to see the shape (first 1KB)
+            try:
+                compact = json.dumps(
+                    post_data_json, separators=(",", ":"), ensure_ascii=False
+                )
+                compact_snippet = compact[:1024]
+            except Exception:
+                compact_snippet = None
+
+            logger.warning(
+                "failed to extract token from request: missing_fields=%s top_keys=%s serviceIntegrityDimensions_keys=%s tokens_like_keys=%s url=%s json_snippet=%s",
+                [
+                    "poToken" if potoken is None else None,
+                    "visitorData" if visitor_data is None else None,
+                ],
+                top_keys,
+                service_keys,
+                tokens_like[:25],
+                getattr(request, "url", "<unknown>"),
+                compact_snippet,
+            )
+            return None
+
         token_info = TokenInfo(
             updated=int(time.time()), potoken=potoken, visitor_data=visitor_data
         )
@@ -241,11 +373,15 @@ class PotokenExtractor:
                 getattr(req, "url", None),
             )
             return
-        if "/youtubei/v1/player" not in req.url:
-            logger.debug(
-                "ignoring POST to different endpoint: %s", getattr(req, "url", None)
-            )
+        url = getattr(req, "url", None)
+        if not url or "youtubei/v1/" not in url:
+            logger.debug("ignoring POST to non-youtubei endpoint: %s", url)
             return
+        if "/youtubei/v1/player" not in url:
+            logger.debug(
+                "POST to youtubei API (non-player endpoint): %s - attempting extraction anyway",
+                url,
+            )
         token_info = self._extract_token(req)
         if token_info is None:
             logger.debug("matched endpoint but failed to extract token from request")
