@@ -345,7 +345,7 @@ class PotokenExtractor:
 
     async def _wait_for_handler(self) -> bool:
         try:
-            timeout_s = 120
+            timeout_s = 60
             logger.debug(
                 "waiting up to %ss for outgoing POST /youtubei/v1/player request",
                 timeout_s,
